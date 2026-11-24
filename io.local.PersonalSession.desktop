@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Personal Session
+Comment=Start personal apps or close them and seal the encrypted volume
+Exec=/usr/local/bin/personal-session
+Icon=veracrypt
+StartupWMClass=personal-session
+Keywords=Personal;Start;Stop;Scratchpad;VeraCrypt;
+Terminal=false
+Categories=Utility;

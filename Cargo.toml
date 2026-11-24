@@ -1,0 +1,30 @@
+[package]
+name = "personal-session"
+version = "1.0.0"
+edition = "2024"
+license = "MIT"
+description = "Manage encrypted personal app sessions in a Hyprland scratchpad"
+repository = "https://github.com/amir-seraj/personal-session"
+
+[dependencies]
+anyhow = "1"
+rune = { git = "https://github.com/anomalyco/rune", rev = "b5ed2448658e858f87829969b21147528a227b34", features = ["tooling"] }
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+
+[profile.release]
+opt-level = 1
+debug = false
+strip = true
+
+[patch.crates-io]
+winit = { git = "https://github.com/anomalyco/rune", rev = "b5ed2448658e858f87829969b21147528a227b34" }
+sctk-adwaita = { git = "https://github.com/anomalyco/rune", rev = "b5ed2448658e858f87829969b21147528a227b34" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "b5ed2448658e858f87829969b21147528a227b34" }
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "b5ed2448658e858f87829969b21147528a227b34" }
+naga = { git = "https://github.com/anomalyco/rune", rev = "b5ed2448658e858f87829969b21147528a227b34" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "b5ed2448658e858f87829969b21147528a227b34" }
+accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "b5ed2448658e858f87829969b21147528a227b34" }
+accesskit_atspi_common = { git = "https://github.com/anomalyco/rune", rev = "b5ed2448658e858f87829969b21147528a227b34" }

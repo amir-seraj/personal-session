@@ -1,0 +1,4 @@
+{
+  "apps": ["vscode", "chrome", "obsidian", "telegram"],
+  "vault": "Vault"
+}
