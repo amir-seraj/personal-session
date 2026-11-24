@@ -6,16 +6,16 @@ Open a VeraCrypt volume and launch dedicated app profiles on Hyprland’s `speci
 
 ## Requirements
 
-The downloadable x86_64 Linux build targets glibc 2.44 or newer. It was built on Manjaro. Other GNU/Linux systems can build from source. The panel uses Rune and Vulkan. Session control requires a running Hyprland session with Lua dispatch support, Kitty, VeraCrypt, sudo, getent, GNU coreutils, findmnt, fuser and systemd user services. Install the apps you enable. The supported launchers include `/usr/bin/code`, `/usr/bin/google-chrome-stable`, `/usr/bin/obsidian` and Telegram Desktop.
+The downloadable x86_64 Linux build targets glibc 2.44 or newer. It was built on Manjaro. Other GNU/Linux systems can build from source. The panel uses Rune and Vulkan. Session control requires a running Hyprland session with Lua dispatch support, Zenity or KDialog, VeraCrypt, sudo, getent, GNU coreutils, findmnt, fuser and systemd user services. Install the apps you enable. The supported launchers include `/usr/bin/code`, `/usr/bin/google-chrome-stable`, `/usr/bin/obsidian` and Telegram Desktop.
 
 ## Install
 
-Download the tarball and SHA256SUMS from the [release page](https://github.com/amir-seraj/personal-session/releases/tag/v1.1.0). Run these commands in the download directory.
+Download the tarball and SHA256SUMS from the [release page](https://github.com/amir-seraj/personal-session/releases/tag/v1.1.1). Run these commands in the download directory.
 
 ```sh
 sha256sum -c SHA256SUMS
-tar -xzf personal-session-1.1.0-x86_64-linux-gnu.tar.gz
-cd personal-session-1.1.0-x86_64-linux-gnu
+tar -xzf personal-session-1.1.1-x86_64-linux-gnu.tar.gz
+cd personal-session-1.1.1-x86_64-linux-gnu
 sudo ./install.sh
 ```
 
@@ -56,7 +56,7 @@ You can also edit `~/.config/personal-session/config.json` while the session is 
 
 ## Use
 
-Open **Personal Session** in the application menu. **Start** opens the password prompt in Kitty. The configured profiles launch on the scratchpad. Use your Hyprland shortcut for that workspace. To close, save your work and use the panel’s stop action. Stop & seal also closes windows using the volume, stops user services that hold files open and asks remaining user processes to exit. If an app asks to save, answer its prompt and retry Stop & seal. The volume helper checks for remaining holders before dismounting.
+Open **Personal Session** in the application menu. **Start** opens a graphical password dialog for the VeraCrypt volume. Terminal launches keep their text prompt. If an app fails to open, the panel names it and offers **Retry start**. The configured profiles launch on the scratchpad. Use your Hyprland shortcut for that workspace. To close, save your work and use the panel’s stop action. Stop & seal also closes windows using the volume, stops user services that hold files open and asks remaining user processes to exit. If an app asks to save, answer its prompt and retry Stop & seal. The volume helper checks for remaining holders before dismounting.
 
 | Command | Action |
 | --- | --- |
@@ -70,6 +70,6 @@ Open **Personal Session** in the application menu. **Start** opens the password 
 
 From the checkout, run `bash scripts/package.sh` with a recent stable Rust toolchain, Git, Python 3, GNU tar, Bash and a C/C++ build toolchain installed. It runs the release tests and writes the archive and checksum under `dist/`. Dependencies are pinned in Cargo.lock. The released binaries include Rune’s default fonts. WhiteSur icons are optional and loaded from an existing local installation.
 
-Run `sudo /usr/local/lib/personal-session/v1.1.0/uninstall.sh` to remove the program and menu entry. Then remove its two sudoers grants with visudo. The volume and user configuration stay on disk.
+Run `sudo /usr/local/lib/personal-session/v1.1.1/uninstall.sh` to remove the program and menu entry. Then remove its two sudoers grants with visudo. The volume and user configuration stay on disk.
 
 Personal Session is distributed under the [MIT license](LICENSE). The binary archive includes third-party license notices. See [Rune](https://github.com/anomalyco/rune) for the renderer and [WhiteSur](https://github.com/vinceliuice/WhiteSur-icon-theme) for optional icons.

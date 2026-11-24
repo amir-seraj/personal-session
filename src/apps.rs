@@ -38,7 +38,7 @@ pub const APPS: [App; N] = [
         classes: &["google-chrome", "chrome", "com.google.chrome"],
         exes: &["chrome", "google-chrome-stable"],
         args: &[
-            "--ozone-platform=x11",
+            "--ozone-platform=wayland",
             "--no-first-run",
             "--new-window",
             "about:blank",
