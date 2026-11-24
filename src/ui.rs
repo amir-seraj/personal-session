@@ -159,10 +159,17 @@ impl Panel {
                     ))
     }
     fn edit(&mut self, tx: &mut Tx) {
-        if !self.busy && self.active == Some(false) && self.error.is_none() {
+        if !self.busy && self.active.is_some() && self.error.is_none() {
             self.editor = Some(Editor::open());
             tx.animated();
-            tx.focus_when_shown("app-vscode", true);
+            tx.focus_when_shown(
+                if self.active == Some(false) {
+                    "app-vscode"
+                } else {
+                    "cancel"
+                },
+                true,
+            );
         }
     }
 
@@ -539,9 +546,17 @@ fn edit_view(mut content: El, s: &Panel, editor: &Editor) -> El {
             |s, _| s.editor_job(true),
         ))
         .child(el().grow(1.))
-        .child(button("Cancel", "cancel", !s.busy, false, |s, tx| {
-            s.leave_editor(tx)
-        }));
+        .child(button(
+            if s.active == Some(true) {
+                "Done"
+            } else {
+                "Cancel"
+            },
+            "cancel",
+            !s.busy,
+            false,
+            |s, tx| s.leave_editor(tx),
+        ));
     let save = editable && editor.changed();
     footer = footer.child(button("Save", "save", save, save, |s, _| {
         s.editor_job(false)
@@ -551,7 +566,7 @@ fn edit_view(mut content: El, s: &Panel, editor: &Editor) -> El {
             .as_deref()
             .or(editor.notice.as_deref())
             .or(if s.active == Some(true) {
-                Some("Stop and seal the session before saving changes.")
+                Some("Stop and seal the session to add or remove apps.")
             } else {
                 None
             })
@@ -575,7 +590,7 @@ fn edit_view(mut content: El, s: &Panel, editor: &Editor) -> El {
 }
 
 fn session_view(mut content: El, s: &Panel) -> El {
-    let editable = !s.busy && s.error.is_none() && s.active == Some(false);
+    let editable = !s.busy && s.error.is_none() && s.active.is_some();
     content = content
         .child(
             row()
