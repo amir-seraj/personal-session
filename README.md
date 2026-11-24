@@ -1,6 +1,6 @@
 # Personal Session
 
-Open a VeraCrypt volume and launch dedicated app profiles on Hyprland’s `special:special` workspace. The same panel closes their windows, checks for processes holding the volume open, and reports whether VeraCrypt dismounted it.
+Open a VeraCrypt volume and launch dedicated app profiles on Hyprland’s default scratchpad. The same panel closes their windows, checks for processes holding the volume open, and reports whether VeraCrypt dismounted it.
 
 ![Personal Session showing a closed volume in a fresh profile](assets/preview.png)
 

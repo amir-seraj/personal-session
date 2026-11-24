@@ -77,8 +77,11 @@ fn command(cmd: &str, args: &[String]) -> Result<i32> {
                 [] => session::stop(&|m| println!("{m}")),
                 [v] if v == "--check" => {
                     if let Some(counts) = session::check()? {
-                        for (a, (w, p)) in apps::entries().iter().zip(counts) {
-                            println!("{}: {w} window(s), {p} main process(es)", a.name);
+                        for (a, state) in apps::entries().iter().zip(counts) {
+                            println!(
+                                "{}: {} window(s), {} main process(es)",
+                                a.name, state.windows, state.processes
+                            );
                         }
                     } else {
                         println!("Personal filesystem is unmounted.");

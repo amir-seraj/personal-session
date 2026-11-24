@@ -12,7 +12,10 @@ use std::{
     process::Command,
 };
 
-pub const WORKSPACE: &str = "special:special";
+// The unnamed scratchpad takes "special" as a dispatcher argument. A named
+// "special:special" workspace can have the same displayed name and a different ID.
+pub const WORKSPACE: &str = "special";
+const DEFAULT_SCRATCHPAD_ID: i64 = -99;
 pub const N: usize = 4;
 pub struct App {
     pub name: &'static str,
@@ -64,6 +67,12 @@ pub const APPS: [App; N] = [
 #[derive(Deserialize, Clone)]
 pub struct Workspace {
     pub name: String,
+    id: i64,
+}
+impl Workspace {
+    pub fn is_scratchpad(&self) -> bool {
+        self.id == DEFAULT_SCRATCHPAD_ID
+    }
 }
 #[derive(Deserialize, Clone)]
 pub struct Window {
