@@ -1,4 +1,5 @@
 mod apps;
+mod custom;
 mod session;
 mod ui;
 use anyhow::{Result, bail, ensure};
@@ -10,7 +11,6 @@ use std::{
 };
 
 fn run() -> Result<i32> {
-    personal_session::config::load(false)?;
     // Shells may be inside the personal mount when invoking the session manager.
     let mut args = env::args().collect::<Vec<_>>();
     let invoked = args.remove(0);
@@ -33,6 +33,7 @@ fn run() -> Result<i32> {
             return command(&cmd, &args);
         }
         _ => {
+            personal_session::config::load(false)?;
             ui::run(args)?;
             return Ok(0);
         }
@@ -40,6 +41,11 @@ fn run() -> Result<i32> {
     command(cmd, &args)
 }
 fn command(cmd: &str, args: &[String]) -> Result<i32> {
+    if cmd == "stop" {
+        personal_session::config::load_for_stop()?;
+    } else {
+        personal_session::config::load(false)?;
+    }
     match cmd {
         "start" => match args {
             [] => session::start(false),
@@ -70,9 +76,7 @@ fn command(cmd: &str, args: &[String]) -> Result<i32> {
                 [] => session::stop(&|m| println!("{m}")),
                 [v] if v == "--check" => {
                     if let Some(counts) = session::check()? {
-                        for (a, (w, p)) in
-                            apps::APPS.iter().zip(counts).filter(|(a, _)| a.enabled())
-                        {
+                        for (a, (w, p)) in apps::entries().iter().zip(counts) {
                             println!("{}: {w} window(s), {p} main process(es)", a.name);
                         }
                     } else {

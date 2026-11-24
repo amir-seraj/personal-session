@@ -10,7 +10,9 @@ The downloadable x86_64 Linux build targets glibc 2.44 or newer. It was built on
 
 ## Install
 
-Download the tarball and SHA256SUMS from the [release page](https://github.com/amir-seraj/personal-session/releases/tag/v1.0.0). Run these commands in the download directory.
+For the app editor on this branch, build from source using the instructions below. The v1.0.0 release predates the editor.
+
+For v1.0.0, download the tarball and SHA256SUMS from the [release page](https://github.com/amir-seraj/personal-session/releases/tag/v1.0.0). Run these commands in the download directory.
 
 ```sh
 sha256sum -c SHA256SUMS
@@ -42,10 +44,16 @@ YOUR_LOGIN ALL=(root) NOPASSWD: /usr/local/bin/personal-mount "", /usr/local/bin
 
 ### Choose apps
 
-Copy `examples/config.json` to `~/.config/personal-session/config.json` to customize the defaults. Select one or more of `vscode`, `chrome`, `obsidian` and `telegram`. For Obsidian, set `vault` to an existing vault directory inside the volume containing a `.obsidian` directory. Its default name is `Vault`. A single-app setup can use:
+![Manage apps in the Personal Session panel](assets/manage-apps.png)
+
+Open **Personal Session → Manage apps** while the volume is sealed. Check the apps you want at startup. To add another GUI app, choose **Add executable** and select its executable file. The file picker uses Zenity or KDialog. Save to apply the selection, or cancel to discard it. Removing an app leaves its profile on the volume. An empty selection is valid; add an app before starting the next session.
+
+VS Code, Chrome, Obsidian and Telegram have dedicated launch settings. For a custom executable, the launcher runs the file directly with no arguments and gives it private HOME, XDG config, data, cache, state and temporary directories under the mounted volume. Choose a trusted executable that opens its own window and supports these directories. Apps that forward to another running instance or require desktop-launch arguments may fail the readiness check. These directories provide profile separation, not a security sandbox.
+
+You can also edit `~/.config/personal-session/config.json` while the session is sealed. Built-in IDs and absolute executable paths can appear together. For Obsidian, set `vault` to an existing directory inside the volume containing a `.obsidian` directory. The default is `Vault`.
 
 ```json
-{"apps":["chrome"]}
+{"apps":["chrome","/usr/bin/kitty"],"vault":"Vault"}
 ```
 
 ## Use

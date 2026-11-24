@@ -8,6 +8,7 @@ repository = "https://github.com/amir-seraj/personal-session"
 
 [dependencies]
 anyhow = "1"
+blake3 = "1"
 rune = { git = "https://github.com/anomalyco/rune", rev = "b5ed2448658e858f87829969b21147528a227b34", features = ["tooling"] }
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }

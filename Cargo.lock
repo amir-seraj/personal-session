@@ -2183,6 +2183,7 @@ name = "personal-session"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "blake3",
  "libc",
  "rune",
  "serde",
