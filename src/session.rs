@@ -1,4 +1,4 @@
-use crate::apps::{self, APPS, Groups, N, WORKSPACE};
+use crate::apps::{self, Entry, Groups, WORKSPACE};
 use crate::volume;
 use anyhow::{Result, ensure};
 use serde_json::json;
@@ -40,15 +40,27 @@ pub fn lock(name: &str) -> Result<Option<File>> {
         Err(e) => Err(e.into()),
     }
 }
-pub type Counts = [(usize, usize); N];
+pub fn save_selection(expected: &[String], next: &[String]) -> Result<()> {
+    let _lock = lock("start.lock")?.ok_or_else(|| {
+        anyhow::anyhow!("A session operation is in progress. Try again when it finishes.")
+    })?;
+    ensure!(
+        !volume::mounted()?,
+        "Stop and seal the session before changing its apps."
+    );
+    personal_session::config::get().save_selection(expected, next)
+}
+pub type Counts = Vec<(usize, usize)>;
 pub fn check() -> Result<Option<Counts>> {
+    personal_session::config::get().refresh_selection()?;
     if !volume::mounted()? {
         return Ok(None);
     }
     volume::verify()?;
-    let groups = apps::windows()?;
-    let mut counts = std::array::from_fn(|i| (groups[i].len(), 0));
-    for (_, i) in apps::roots()? {
+    let entries = apps::entries();
+    let groups = apps::windows(&entries)?;
+    let mut counts: Counts = groups.iter().map(|w| (w.len(), 0)).collect();
+    for (_, i) in apps::roots(&entries)? {
         counts[i].1 += 1
     }
     Ok(Some(counts))
@@ -56,10 +68,10 @@ pub fn check() -> Result<Option<Counts>> {
 fn ready(wins: &[apps::Window]) -> bool {
     !wins.is_empty() && wins.iter().all(|w| w.workspace.name == WORKSPACE)
 }
-fn report(g: &Groups) -> Result<bool> {
-    let roots = apps::roots()?;
+fn report(entries: &[Entry], g: &Groups) -> Result<bool> {
+    let roots = apps::roots(entries)?;
     let mut count = 0;
-    for (i, wins) in g.iter().enumerate().filter(|(i, _)| APPS[*i].enabled()) {
+    for (i, wins) in g.iter().enumerate() {
         let state = if ready(wins) {
             count += 1;
             "ready"
@@ -75,22 +87,27 @@ fn report(g: &Groups) -> Result<bool> {
             .map(|w| format!("{} on {}", w.address, w.workspace.name))
             .collect::<Vec<_>>()
             .join(", ");
-        println!("{}: {state} {detail}", APPS[i].name);
+        println!("{}: {state} {detail}", entries[i].name);
     }
-    let total = APPS.iter().filter(|a| a.enabled()).count();
+    let total = entries.len();
     println!("{count}/{total} ready · Super+S toggles the scratchpad");
     Ok(count == total)
 }
 pub fn status() -> Result<bool> {
+    personal_session::config::get().refresh_selection()?;
     volume::verify()?;
     println!("Verified personal volume.");
-    report(&apps::windows()?)
+    {
+        let entries = apps::entries();
+        report(&entries, &apps::windows(&entries)?)
+    }
 }
 pub fn start(only_sealed: bool) -> Result<i32> {
     let Some(_guard) = lock("start.lock")? else {
         eprintln!("Another personal session command is in progress.");
         return Ok(2);
     };
+    personal_session::config::get().refresh_selection()?;
     if only_sealed && volume::mounted()? {
         volume::verify()?;
         println!("Personal session is already active.");
@@ -109,6 +126,11 @@ pub fn start(only_sealed: bool) -> Result<i32> {
     result
 }
 fn start_locked(log: &mut File) -> Result<i32> {
+    let entries = apps::entries();
+    ensure!(
+        !entries.is_empty(),
+        "Choose an app in Manage apps before starting."
+    );
     apps::clients()?;
     if !volume::mounted()? {
         ensure!(
@@ -120,30 +142,27 @@ fn start_locked(log: &mut File) -> Result<i32> {
         )
     }
     volume::verify()?;
-    let g = apps::windows()?;
-    let bg = apps::roots()?;
-    let mut failed = [false; N];
+    let g = apps::windows(&entries)?;
+    let bg = apps::roots(&entries)?;
+    let mut failed = vec![false; entries.len()];
     thread::scope(|scope| -> Result<()> {
         let mut jobs = Vec::new();
-        for (i, _) in g
-            .iter()
-            .enumerate()
-            .filter(|(i, w)| APPS[*i].enabled() && w.is_empty())
-        {
+        for (i, _) in g.iter().enumerate().filter(|(_, w)| w.is_empty()) {
             let verb = if bg.iter().any(|p| p.1 == i) {
                 "Reopening"
             } else {
                 "Starting"
             };
-            println!("{verb} {}", APPS[i].name);
-            writeln!(log, "{verb} {}", APPS[i].name)?;
-            jobs.push((i, scope.spawn(move || apps::launch(i))));
+            println!("{verb} {}", entries[i].name);
+            writeln!(log, "{verb} {}", entries[i].name)?;
+            let entry = &entries[i];
+            jobs.push((i, scope.spawn(move || apps::launch(entry))));
         }
         for (i, job) in jobs {
             if let Err(e) = job.join().expect("Window launcher thread failed") {
                 failed[i] = true;
-                println!("{}: {e}", APPS[i].name);
-                writeln!(log, "{}: {e}", APPS[i].name)?;
+                println!("{}: {e}", entries[i].name);
+                writeln!(log, "{}: {e}", entries[i].name)?;
             }
         }
         Ok(())
@@ -152,11 +171,11 @@ fn start_locked(log: &mut File) -> Result<i32> {
     let mut quiet = None;
     let mut moved = HashMap::new();
     loop {
-        let groups = apps::windows()?;
+        let groups = apps::windows(&entries)?;
         let now = Instant::now();
         let mut settled = true;
         for (i, wins) in groups.iter().enumerate() {
-            if APPS[i].enabled() && wins.is_empty() && !failed[i] {
+            if wins.is_empty() && !failed[i] {
                 settled = false
             }
             for w in wins.iter().filter(|w| w.workspace.name != WORKSPACE) {
@@ -189,17 +208,17 @@ fn start_locked(log: &mut File) -> Result<i32> {
         thread::sleep(Duration::from_millis(250));
     }
     volume::verify()?;
-    let g = apps::windows()?;
+    let g = apps::windows(&entries)?;
     for (i, w) in g.iter().enumerate() {
         writeln!(
             log,
             "{}: {} windows, ready={}",
-            APPS[i].name,
+            entries[i].name,
             w.len(),
             ready(w)
         )?
     }
-    Ok(if report(&g)? { 0 } else { 1 })
+    Ok(if report(&entries, &g)? { 0 } else { 1 })
 }
 pub fn stop(progress: &dyn Fn(&str)) -> Result<i32> {
     let Some(_guard) = lock("start.lock")? else {
@@ -211,28 +230,24 @@ pub fn stop(progress: &dyn Fn(&str)) -> Result<i32> {
         return Ok(0);
     }
     volume::verify()?;
-    let groups = apps::windows()?;
+    let entries = apps::cleanup_entries()?;
+    let groups = apps::windows(&entries)?;
     for (i, wins) in groups.iter().enumerate() {
         if !wins.is_empty() {
-            progress(&format!("Closing {} ({})", APPS[i].name, wins.len()));
+            progress(&format!("Closing {} ({})", entries[i].name, wins.len()));
         }
         for w in wins {
-            let selector = json!(format!("address:{}", w.address));
-            if let Err(e) = apps::dispatch(&format!("hl.dsp.window.close({{window={selector}}})"))
-                && apps::clients()?.iter().any(|c| c.address == w.address)
-            {
-                return Err(e);
-            }
+            apps::close_window(&w.address)?;
         }
     }
     let deadline = Instant::now() + Duration::from_secs(8);
     loop {
-        let groups = apps::windows()?;
+        let groups = apps::windows(&entries)?;
         let open: Vec<_> = groups
             .iter()
             .enumerate()
             .filter(|(_, w)| !w.is_empty())
-            .map(|(i, _)| APPS[i].name)
+            .map(|(i, _)| entries[i].name.as_str())
             .collect();
         if open.is_empty() {
             break;
@@ -244,21 +259,22 @@ pub fn stop(progress: &dyn Fn(&str)) -> Result<i32> {
         );
         thread::sleep(Duration::from_millis(250));
     }
-    let roots = apps::roots()?;
+    let roots = apps::roots(&entries)?;
     if !roots.is_empty() {
         progress("Quitting personal background apps…");
     }
     for (pid, i) in roots {
-        apps::terminate(pid, i)?
+        apps::terminate(pid, &entries[i])?
     }
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !apps::roots()?.is_empty() {
+    while !apps::roots(&entries)?.is_empty() {
         ensure!(
             Instant::now() < deadline,
             "Personal apps are still exiting. Retry after they finish."
         );
         thread::sleep(Duration::from_millis(250));
     }
+    crate::holders::release(&personal_session::config::get().mount, progress)?;
     progress("Checking holders and sealing the volume…");
     let out = Command::new("/usr/bin/sudo")
         .args(["-n", "/usr/local/bin/personal-umount"])

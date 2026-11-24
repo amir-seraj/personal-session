@@ -6,16 +6,16 @@ Open a VeraCrypt volume and launch dedicated app profiles on Hyprland’s `speci
 
 ## Requirements
 
-The downloadable x86_64 Linux build targets glibc 2.44 or newer. It was built on Manjaro. Other GNU/Linux systems can build from source. The panel uses Rune and Vulkan. Session control requires a running Hyprland session with Lua dispatch support, Kitty, VeraCrypt, sudo, getent, GNU coreutils, findmnt and fuser. Install the apps you enable. The supported launchers include `/usr/bin/code`, `/usr/bin/google-chrome-stable`, `/usr/bin/obsidian` and Telegram Desktop.
+The downloadable x86_64 Linux build targets glibc 2.44 or newer. It was built on Manjaro. Other GNU/Linux systems can build from source. The panel uses Rune and Vulkan. Session control requires a running Hyprland session with Lua dispatch support, Kitty, VeraCrypt, sudo, getent, GNU coreutils, findmnt, fuser and systemd user services. Install the apps you enable. The supported launchers include `/usr/bin/code`, `/usr/bin/google-chrome-stable`, `/usr/bin/obsidian` and Telegram Desktop.
 
 ## Install
 
-Download the tarball and SHA256SUMS from the [release page](https://github.com/amir-seraj/personal-session/releases/tag/v1.0.0). Run these commands in the download directory.
+Download the tarball and SHA256SUMS from the [release page](https://github.com/amir-seraj/personal-session/releases/tag/v1.1.0). Run these commands in the download directory.
 
 ```sh
 sha256sum -c SHA256SUMS
-tar -xzf personal-session-1.0.0-x86_64-linux-gnu.tar.gz
-cd personal-session-1.0.0-x86_64-linux-gnu
+tar -xzf personal-session-1.1.0-x86_64-linux-gnu.tar.gz
+cd personal-session-1.1.0-x86_64-linux-gnu
 sudo ./install.sh
 ```
 
@@ -42,15 +42,21 @@ YOUR_LOGIN ALL=(root) NOPASSWD: /usr/local/bin/personal-mount "", /usr/local/bin
 
 ### Choose apps
 
-Copy `examples/config.json` to `~/.config/personal-session/config.json` to customize the defaults. Select one or more of `vscode`, `chrome`, `obsidian` and `telegram`. For Obsidian, set `vault` to an existing vault directory inside the volume containing a `.obsidian` directory. Its default name is `Vault`. A single-app setup can use:
+![Manage apps in the Personal Session panel](assets/manage-apps.png)
+
+Open **Personal Session → Manage apps** while the volume is sealed. Check the apps you want at startup. To add another GUI app, choose **Add executable** and select its executable file. The file picker uses Zenity or KDialog. Save to apply the selection, or cancel to discard it. Removing an app leaves its profile on the volume. An empty selection is valid; add an app before starting the next session.
+
+VS Code, Chrome, Obsidian and Telegram have dedicated launch settings. For a custom executable, the launcher runs the file directly with no arguments and gives it private HOME, XDG config, data, cache, state and temporary directories under the mounted volume. Choose a trusted executable that opens its own window and supports these directories. Apps that forward to another running instance or require desktop-launch arguments may fail the readiness check. These directories provide profile separation, not a security sandbox.
+
+You can also edit `~/.config/personal-session/config.json` while the session is sealed. Built-in IDs and absolute executable paths can appear together. For Obsidian, set `vault` to an existing directory inside the volume containing a `.obsidian` directory. The default is `Vault`.
 
 ```json
-{"apps":["chrome"]}
+{"apps":["chrome","/usr/bin/kitty"],"vault":"Vault"}
 ```
 
 ## Use
 
-Open **Personal Session** in the application menu. **Start** opens the password prompt in Kitty. The configured profiles launch on the scratchpad. Use your Hyprland shortcut for that workspace. To close, save your work and use the panel’s stop action. If an app needs confirmation or another process holds the volume, resolve the prompt or release the file and retry.
+Open **Personal Session** in the application menu. **Start** opens the password prompt in Kitty. The configured profiles launch on the scratchpad. Use your Hyprland shortcut for that workspace. To close, save your work and use the panel’s stop action. Stop & seal also closes windows using the volume, stops user services that hold files open and asks remaining user processes to exit. If an app asks to save, answer its prompt and retry Stop & seal. The volume helper checks for remaining holders before dismounting.
 
 | Command | Action |
 | --- | --- |
@@ -64,6 +70,6 @@ Open **Personal Session** in the application menu. **Start** opens the password 
 
 From the checkout, run `bash scripts/package.sh` with a recent stable Rust toolchain, Git, Python 3, GNU tar, Bash and a C/C++ build toolchain installed. It runs the release tests and writes the archive and checksum under `dist/`. Dependencies are pinned in Cargo.lock. The released binaries include Rune’s default fonts. WhiteSur icons are optional and loaded from an existing local installation.
 
-Run `sudo /usr/local/lib/personal-session/v1.0.0/uninstall.sh` to remove the program and menu entry. Then remove its two sudoers grants with visudo. The volume and user configuration stay on disk.
+Run `sudo /usr/local/lib/personal-session/v1.1.0/uninstall.sh` to remove the program and menu entry. Then remove its two sudoers grants with visudo. The volume and user configuration stay on disk.
 
 Personal Session is distributed under the [MIT license](LICENSE). The binary archive includes third-party license notices. See [Rune](https://github.com/anomalyco/rune) for the renderer and [WhiteSur](https://github.com/vinceliuice/WhiteSur-icon-theme) for optional icons.

@@ -73,7 +73,7 @@ pub struct Window {
     #[serde(rename = "initialClass", default)]
     initial_class: String,
     pub mapped: bool,
-    pid: i32,
+    pub pid: i32,
 }
 pub fn clients() -> Result<Vec<Window>> {
     Ok(serde_json::from_str(&volume::output(
@@ -116,12 +116,6 @@ fn proc_info(pid: i32) -> Option<Process> {
     Some(Process { exe, args, parent })
 }
 impl App {
-    pub fn enabled(&self) -> bool {
-        get().enabled(self.id)
-    }
-    fn owns(&self, p: &Process) -> bool {
-        self.enabled() && self.owns_profile(p, &get().mount)
-    }
     fn owns_profile(&self, p: &Process, mount: &str) -> bool {
         if !self.exes.contains(&p.exe.as_str()) {
             return false;
@@ -142,24 +136,100 @@ impl App {
             || (self.id == "telegram" && c.starts_with("org.telegram.desktop."))
     }
 }
-pub type Groups = [Vec<Window>; N];
-pub fn windows() -> Result<Groups> {
-    let mut out = Groups::default();
-    let mut cache = HashMap::new();
-    for w in clients()?.into_iter().filter(|w| w.mapped) {
-        let Some(i) = APPS
+#[derive(Clone)]
+pub struct Entry {
+    pub key: String,
+    pub name: String,
+    token: String,
+}
+impl Entry {
+    fn new(key: String) -> Self {
+        let name = APPS
             .iter()
-            .position(|a| a.matches(&w.class) || a.matches(&w.initial_class))
-        else {
-            continue;
+            .find(|app| app.id == key)
+            .map(|a| a.name)
+            .or_else(|| Path::new(&key).file_name()?.to_str())
+            .unwrap_or(&key)
+            .to_owned();
+        let token = if key.starts_with('/') {
+            crate::custom::id(&key)
+        } else {
+            key.clone()
         };
+        Self { key, name, token }
+    }
+    fn builtin(&self) -> Option<&'static App> {
+        APPS.iter().find(|app| app.id == self.key)
+    }
+    fn owns(&self, process: &Process, custom_owner: Option<&str>) -> bool {
+        match self.builtin() {
+            Some(app) => app.owns_profile(process, &get().mount),
+            None => custom_owner == Some(self.token.as_str()),
+        }
+    }
+}
+pub fn entries() -> Vec<Entry> {
+    get().selection().into_iter().map(Entry::new).collect()
+}
+// Cleanup follows profile identity even if the preference file was edited during a session.
+pub fn cleanup_entries() -> Result<Vec<Entry>> {
+    let mut result = entries();
+    for app in &APPS {
+        if !result.iter().any(|entry| entry.key == app.id) {
+            result.push(Entry::new(app.id.to_owned()));
+        }
+    }
+    let directory = Path::new(&get().mount).join("custom-apps");
+    match fs::read_dir(directory) {
+        Ok(children) => {
+            for child in children {
+                let token = child?.file_name().to_string_lossy().into_owned();
+                if token
+                    .strip_prefix("custom-")
+                    .is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+                    && !result.iter().any(|entry| entry.token == token)
+                {
+                    result.push(Entry {
+                        key: token.clone(),
+                        name: "Custom app".into(),
+                        token,
+                    });
+                }
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+        Err(e) => return Err(e.into()),
+    }
+    Ok(result)
+}
+pub type Groups = Vec<Vec<Window>>;
+pub fn windows(entries: &[Entry]) -> Result<Groups> {
+    let mut out = vec![Vec::new(); entries.len()];
+    let mut cache = HashMap::new();
+    let custom = entries.iter().any(|a| a.builtin().is_none());
+    for w in clients()?.into_iter().filter(|w| w.mapped) {
         let mut pid = w.pid;
         let mut seen = HashSet::new();
         while pid > 1 && seen.insert(pid) {
-            let Some(p) = cache.entry(pid).or_insert_with(|| proc_info(pid)) else {
+            let Some((p, owner)) = cache.entry(pid).or_insert_with(|| {
+                Some((
+                    proc_info(pid)?,
+                    if custom {
+                        crate::custom::owner_key(pid, &get().mount)
+                    } else {
+                        None
+                    },
+                ))
+            }) else {
                 break;
             };
-            if APPS[i].owns(p) {
+            let index = entries.iter().position(|entry| {
+                entry
+                    .builtin()
+                    .is_none_or(|a| a.matches(&w.class) || a.matches(&w.initial_class))
+                    && entry.owns(p, owner.as_deref())
+            });
+            if let Some(i) = index {
                 out[i].push(w);
                 break;
             }
@@ -168,50 +238,76 @@ pub fn windows() -> Result<Groups> {
     }
     Ok(out)
 }
-pub fn roots() -> Result<Vec<(i32, usize)>> {
+pub fn roots(entries: &[Entry]) -> Result<Vec<(i32, usize)>> {
     let mut out = Vec::new();
+    let custom = entries.iter().any(|a| a.builtin().is_none());
     for entry in fs::read_dir("/proc")?.flatten() {
         let Some(pid) = entry.file_name().to_str().and_then(|s| s.parse().ok()) else {
             continue;
         };
-        if let Some(p) = proc_info(pid)
-            && !p.args.iter().any(|a| a.starts_with("--type="))
-            && let Some(i) = APPS.iter().position(|a| a.owns(&p))
-        {
-            out.push((pid, i));
+        if let Some(p) = proc_info(pid) {
+            let owner = if custom {
+                crate::custom::owner_key(pid, &get().mount)
+            } else {
+                None
+            };
+            if let Some(i) = entries.iter().position(|a| {
+                (a.builtin().is_none() || !p.args.iter().any(|arg| arg.starts_with("--type=")))
+                    && a.owns(&p, owner.as_deref())
+            }) {
+                out.push((pid, i));
+            }
         }
     }
     Ok(out)
 }
-pub fn terminate(pid: i32, i: usize) -> Result<()> {
-    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+pub fn pin(pid: i32) -> Result<Option<std::os::fd::OwnedFd>> {
+    use std::os::fd::{FromRawFd, OwnedFd};
     let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
     if fd < 0 {
         let e = std::io::Error::last_os_error();
         if e.raw_os_error() == Some(libc::ESRCH) {
-            return Ok(());
+            return Ok(None);
         }
         return Err(e.into());
     }
     let fd = unsafe { OwnedFd::from_raw_fd(fd as i32) };
-    if let Some(p) = proc_info(pid)
-        && APPS[i].owns(&p)
-    {
-        let r = unsafe {
-            libc::syscall(
-                libc::SYS_pidfd_send_signal,
-                fd.as_raw_fd(),
-                libc::SIGTERM,
-                std::ptr::null::<libc::siginfo_t>(),
-                0,
-            )
-        };
-        if r < 0 {
-            let e = std::io::Error::last_os_error();
-            if e.raw_os_error() != Some(libc::ESRCH) {
-                return Err(e.into());
-            }
+    Ok(Some(fd))
+}
+pub fn terminate_pinned(fd: &std::os::fd::OwnedFd) -> Result<()> {
+    use std::os::fd::AsRawFd;
+    let r = unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            fd.as_raw_fd(),
+            libc::SIGTERM,
+            std::ptr::null::<libc::siginfo_t>(),
+            0,
+        )
+    };
+    if r < 0 {
+        let e = std::io::Error::last_os_error();
+        if e.raw_os_error() != Some(libc::ESRCH) {
+            return Err(e.into());
         }
+    }
+    Ok(())
+}
+pub fn terminate(pid: i32, entry: &Entry) -> Result<()> {
+    let Some(fd) = pin(pid)? else { return Ok(()) };
+    if let Some(p) = proc_info(pid)
+        && entry.owns(&p, crate::custom::owner_key(pid, &get().mount).as_deref())
+    {
+        terminate_pinned(&fd)?;
+    }
+    Ok(())
+}
+pub fn close_window(address: &str) -> Result<()> {
+    let selector = serde_json::json!(format!("address:{address}"));
+    if let Err(e) = dispatch(&format!("hl.dsp.window.close({{window={selector}}})"))
+        && clients()?.iter().any(|w| w.address == address)
+    {
+        return Err(e);
     }
     Ok(())
 }
@@ -220,18 +316,31 @@ pub fn dispatch(s: &str) -> Result<()> {
     ensure!(reply == "ok", "Hyprland: {reply}");
     Ok(())
 }
-pub fn launch(i: usize) -> Result<()> {
-    let command = format!("/usr/local/bin/personal-session launch-app {}", APPS[i].id);
+pub fn launch(entry: &Entry) -> Result<()> {
+    if entry.builtin().is_none() {
+        crate::custom::validate(&entry.key)?;
+    }
+    let exe = std::env::current_exe()?;
+    let quoted = exe
+        .to_str()
+        .context("Invalid launcher path")?
+        .replace('\'', "'\\''");
+    let command = format!("'{quoted}' launch-app {}", entry.token);
     dispatch(&format!(
         "hl.dsp.exec_cmd({}, {{workspace=\"{WORKSPACE} silent\"}})",
         json!(command)
     ))
 }
 pub fn profile(id: &str, extra: &[String], defaults: bool) -> Result<()> {
-    let app = APPS.iter().find(|a| a.id == id).context("Unknown app")?;
-    volume::verify()?;
+    let entry = entries()
+        .into_iter()
+        .find(|a| a.token == id)
+        .context("App is not in this session")?;
     let mount = &get().mount;
-    ensure!(app.enabled(), "Profile disabled");
+    let Some(app) = entry.builtin() else {
+        return crate::custom::launch(&entry.key, mount);
+    };
+    volume::verify()?;
     let root = Path::new(mount);
     let mut cmd = match id {
         "vscode" => {

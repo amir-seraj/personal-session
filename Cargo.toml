@@ -1,6 +1,6 @@
 [package]
 name = "personal-session"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 license = "MIT"
 description = "Manage encrypted personal app sessions in a Hyprland scratchpad"
@@ -8,6 +8,7 @@ repository = "https://github.com/amir-seraj/personal-session"
 
 [dependencies]
 anyhow = "1"
+blake3 = "1"
 rune = { git = "https://github.com/anomalyco/rune", rev = "b5ed2448658e858f87829969b21147528a227b34", features = ["tooling"] }
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }

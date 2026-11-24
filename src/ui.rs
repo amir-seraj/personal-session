@@ -3,11 +3,13 @@ use crate::{
     session::{self, Counts},
     volume,
 };
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
+use personal_session::config::get;
 use rune::{
     App, AppSpec, Color, Cx, El, Image, ImageCache, Key, TextStyle, Tx, Waker, WindowOptions, col,
     el, row, text,
 };
+use std::path::Path;
 use std::{
     fs,
     process::Command,
@@ -19,6 +21,8 @@ use std::{
 enum Message {
     Progress(String),
     Done(Result<Option<Counts>>),
+    Picked(Result<Option<String>>),
+    Saved(Result<()>),
 }
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Action {
@@ -26,8 +30,93 @@ enum Action {
     Start,
     Stop,
 }
+static CHECK: rune::Icon = rune::Icon {
+    name: "selected-app",
+    view: 16.,
+    body: r#"<path d="m3 8 3 3 7-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>"#,
+};
+
+struct Editor {
+    original: Vec<String>,
+    selected: Vec<String>,
+    custom: Vec<String>,
+    notice: Option<String>,
+}
+
+impl Editor {
+    fn open() -> Self {
+        let selected = get().selection();
+        let custom = selected
+            .iter()
+            .filter(|key| Path::new(key).is_absolute())
+            .cloned()
+            .collect();
+        Self {
+            original: selected.clone(),
+            selected,
+            custom,
+            notice: None,
+        }
+    }
+
+    fn toggle(&mut self, key: &str) {
+        self.notice = None;
+        if self.selected.iter().any(|k| k == key) {
+            self.selected.retain(|k| k != key);
+        } else {
+            self.selected.push(key.into());
+        }
+    }
+
+    fn changed(&self) -> bool {
+        self.original.len() != self.selected.len()
+            || self.selected.iter().any(|k| !self.original.contains(k))
+    }
+}
+
+fn pick_executable() -> Result<Option<String>> {
+    let (program, args): (&str, &[&str]) = if Path::new("/usr/bin/zenity").is_file() {
+        (
+            "/usr/bin/zenity",
+            &[
+                "--file-selection",
+                "--title=Choose an app executable",
+                "--filename=/usr/bin/",
+            ],
+        )
+    } else {
+        (
+            "/usr/bin/kdialog",
+            &[
+                "--title",
+                "Choose an app executable",
+                "--getopenfilename",
+                "/usr/bin/",
+            ],
+        )
+    };
+    let output = Command::new(program)
+        .args(args)
+        .output()
+        .context("Could not open the file picker. Install Zenity or KDialog and try again.")?;
+    if output.status.code() == Some(1) && output.stderr.is_empty() {
+        return Ok(None);
+    }
+    ensure!(
+        output.status.success(),
+        "File picker failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    let output =
+        String::from_utf8(output.stdout).context("Choose an executable with a UTF-8 path.")?;
+    let path = output.strip_suffix('\n').unwrap_or(&output);
+    crate::custom::validate(path)?;
+    Ok(Some(path.to_owned()))
+}
 struct Panel {
     active: Option<bool>,
+    editor: Option<Editor>,
+    open_editor_on_check: bool,
     counts: Counts,
     busy: bool,
     error: Option<String>,
@@ -44,6 +133,8 @@ impl Default for Panel {
         let (tx, rx) = mpsc::channel();
         Self {
             active: None,
+            editor: None,
+            open_editor_on_check: false,
             counts: Default::default(),
             busy: false,
             error: None,
@@ -61,12 +152,60 @@ impl Panel {
     fn allowed(&self, a: Action) -> bool {
         !self.busy
             && (a == Action::Check
-                || self.error.is_none()
-                    && matches!(
-                        (a, self.active),
-                        (Action::Stop, Some(true)) | (Action::Start, Some(false))
-                    ))
+                || (a == Action::Stop && self.active == Some(true))
+                || (a == Action::Start && self.active == Some(false) && self.error.is_none()))
     }
+    fn edit(&mut self, tx: &mut Tx) {
+        if !self.busy && self.active.is_some() && self.error.is_none() {
+            self.editor = Some(Editor::open());
+            tx.animated();
+            tx.focus_when_shown(
+                if self.active == Some(false) {
+                    "app-vscode"
+                } else {
+                    "cancel"
+                },
+                true,
+            );
+        }
+    }
+
+    fn leave_editor(&mut self, tx: &mut Tx) {
+        self.editor = None;
+        tx.animated();
+        tx.focus_when_shown("manage", true);
+    }
+
+    fn editor_job(&mut self, picking: bool) {
+        let Some(editor) = &mut self.editor else {
+            return;
+        };
+        if self.busy || self.active != Some(false) {
+            return;
+        }
+        self.busy = true;
+        editor.notice = Some(
+            if picking {
+                "Choose an executable in the file picker…"
+            } else {
+                "Saving app selection…"
+            }
+            .into(),
+        );
+        let (original, selected) = (editor.original.clone(), editor.selected.clone());
+        let tx = self.tx.clone();
+        let wake = self.wake.clone();
+        thread::spawn(move || {
+            let event = if picking {
+                Message::Picked(pick_executable())
+            } else {
+                Message::Saved(session::save_selection(&original, &selected))
+            };
+            let _ = tx.send(event);
+            wake();
+        });
+    }
+
     fn run(&mut self, a: Action) {
         if !self.allowed(a) {
             return;
@@ -86,17 +225,13 @@ impl Panel {
                 match a {
                     Action::Check => (),
                     Action::Start => {
-                        // The fixed launcher verifies the mount again under the operation lock.
+                        // The CLI verifies the mount again under the operation lock.
                         if !volume::mounted()? {
                             ensure!(
                                 Command::new("/usr/bin/kitty")
-                                    .args([
-                                        "--title",
-                                        "Unlock Personal Session",
-                                        "--",
-                                        "/usr/local/bin/personal-start",
-                                        "--if-sealed"
-                                    ])
+                                    .args(["--title", "Unlock Personal Session", "--"])
+                                    .arg(std::env::current_exe()?)
+                                    .args(["start", "--if-sealed"])
                                     .status()?
                                     .success(),
                                 "Unlock or startup was cancelled."
@@ -144,6 +279,47 @@ fn poll(s: &mut Panel, clock: f64, tx: &mut Tx) -> bool {
         changed = true;
         match event {
             Message::Progress(msg) => s.detail = msg,
+            Message::Picked(result) => {
+                s.busy = false;
+                if s.quit_when_done {
+                    tx.quit();
+                }
+                if let Some(editor) = &mut s.editor {
+                    editor.notice = None;
+                    match result {
+                        Ok(Some(path)) => {
+                            if !editor.custom.contains(&path) {
+                                editor.custom.push(path.clone());
+                            }
+                            if !editor.selected.contains(&path) {
+                                editor.selected.push(path.clone());
+                            } else {
+                                editor.notice = Some("This app is already selected.".into());
+                            }
+                            tx.focus_when_shown(format!("app-{path}"), true);
+                        }
+                        Ok(None) => tx.focus_when_shown("add", true),
+                        Err(e) => editor.notice = Some(format!("{e:#}")),
+                    }
+                }
+            }
+            Message::Saved(result) => {
+                s.busy = false;
+                if s.quit_when_done {
+                    tx.quit();
+                }
+                match result {
+                    Ok(()) => {
+                        s.leave_editor(tx);
+                        s.detail = "App selection saved for the next session.".into();
+                    }
+                    Err(e) => {
+                        if let Some(editor) = &mut s.editor {
+                            editor.notice = Some(format!("{e:#}"));
+                        }
+                    }
+                }
+            }
             Message::Done(result) => {
                 s.busy = false;
                 if s.quit_when_done {
@@ -152,17 +328,27 @@ fn poll(s: &mut Panel, clock: f64, tx: &mut Tx) -> bool {
                 match result {
                     Ok(state) => {
                         s.active = Some(state.is_some());
-                        s.counts = state.unwrap_or_default();
+
                         s.detail = if state.is_some() {
-                            "Volume unlocked · Super+S opens the scratchpad."
+                            "Super+S opens the scratchpad. Stop and seal to change apps."
                         } else {
                             "Start your session to unlock the personal volume."
                         }
                         .into();
+                        s.counts = state.unwrap_or_default();
+                        if s.open_editor_on_check {
+                            s.open_editor_on_check = false;
+                            s.edit(tx);
+                        }
                     }
                     Err(e) => {
                         s.error = Some(format!("{e:#}"));
-                        s.detail = "Review the details, then refresh the session.".into();
+                        s.detail = if s.active == Some(true) {
+                            "Review the details, then retry Stop & seal."
+                        } else {
+                            "Review the details, then refresh the session."
+                        }
+                        .into();
                     }
                 }
             }
@@ -205,6 +391,7 @@ fn button(
         .key(key)
         .role("button")
         .label(name)
+        .focus_ring(2., 1., rgb("#efbb7c"))
         .focusable(enabled)
         .disabled(!enabled)
         .center()
@@ -214,9 +401,14 @@ fn button(
         .fill(rgb(fill))
         .border(1., rgb(if primary { "#eabe89" } else { "#50443a" }))
         .child(label(name, 13., if primary { 600. } else { 400. }, fg));
-    if enabled { b.on_press_tx(on) } else { b }
+    if enabled {
+        b.hover(rgb(if primary { "#f6c890" } else { "#453b33" }))
+            .on_press_tx(on)
+    } else {
+        b
+    }
 }
-fn view(s: &Panel, _: &mut Cx<Panel>) -> El {
+fn view(s: &Panel, cx: &mut Cx<Panel>) -> El {
     let mut content = col()
         .grow(1.)
         .gap(8.)
@@ -228,45 +420,238 @@ fn view(s: &Panel, _: &mut Cx<Panel>) -> El {
             170.,
             [(0., rgb("#56331c")), (1., rgb("#1a1717"))],
         )
-        .border(1., rgb("#594738"))
+        .border(1., rgb("#594738"));
+    if let Some(editor) = &s.editor {
+        content = edit_view(content, s, editor);
+    } else {
+        content = session_view(content, s);
+    }
+    content = content.key(if s.editor.is_some() {
+        "editor-screen"
+    } else {
+        "session-screen"
+    });
+    if !cx.system_reduced_motion() {
+        content = content.transition(rune::Transition::opacity());
+    }
+    col()
+        .w_full()
+        .h_full()
+        .padding(16.)
+        .radial_gradient(
+            [0.34, 0.98],
+            160.,
+            [(0., rgb("#8a451a")), (1., rgb("#0e0d0d"))],
+        )
+        .child(content)
+}
+
+fn edit_view(mut content: El, s: &Panel, editor: &Editor) -> El {
+    let editable = !s.busy && s.active == Some(false) && s.error.is_none();
+    content = content
+        .child(label("Manage apps", 23., 600., "#f7f3ee").window_drag())
         .child(
             label(
-                if s.error.is_some() {
-                    "Session needs attention"
-                } else {
-                    "Personal Session"
-                },
-                23.,
-                600.,
-                "#f7f3ee",
+                "Select startup apps. Removing one keeps its files.",
+                13.,
+                400.,
+                "#d2c7bd",
             )
-            .window_drag(),
+            .wrap(),
+        );
+    let mut list = col()
+        .key("choices")
+        .grow(1.)
+        .min_h(0.)
+        .gap(2.)
+        .padding(2.)
+        .scroll(Default::default());
+    for (key, name) in APPS.iter().map(|a| (a.id, a.name)).chain(
+        editor
+            .custom
+            .iter()
+            .map(|path| (path.as_str(), path.as_str())),
+    ) {
+        let selected = editor.selected.iter().any(|k| k == key);
+        let mut choice = row()
+            .key(format!("app-{key}"))
+            .role("checkbox")
+            .label(name)
+            .checked(selected)
+            .focusable(editable)
+            .disabled(!editable)
+            .focus_ring(1., -2., rgb("#efbb7c"))
+            .w_full()
+            .min_h(22.)
+            .center_y()
+            .gap(8.)
+            .px(4.)
+            .radius(5.);
+        let mut check = el()
+            .size(15., 15.)
+            .radius(4.)
+            .border(1., rgb(if selected { "#eabe89" } else { "#897a6e" }))
+            .center();
+        if selected {
+            check = check
+                .fill(rgb("#efbb7c"))
+                .child(rune::icon(&CHECK, 13.).color(rgb("#442e1d")));
+        }
+        let description = if let Some(parent) = Path::new(key).parent().filter(|p| p.is_absolute())
+        {
+            let basename = Path::new(key)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(name);
+            col()
+                .grow(1.)
+                .min_w(0.)
+                .child(label(basename, 13., 400., "#f7f3ee").truncate())
+                .child(label(parent.display().to_string(), 11., 400., "#bcb4ae").truncate_middle())
+        } else {
+            label(name, 13., 400., "#f7f3ee")
+                .grow(1.)
+                .min_w(0.)
+                .truncate()
+        };
+        choice = choice.child(check).child(description);
+        if editable {
+            let key = key.to_owned();
+            choice = choice
+                .hover(rgb("#39302a"))
+                .on_press_tx(move |s: &mut Panel, _| {
+                    if let Some(e) = &mut s.editor {
+                        e.toggle(&key);
+                    }
+                });
+        }
+        list = list.child(choice);
+    }
+    list = list.child(
+        label(
+            "Custom apps must honor HOME and XDG paths.",
+            12.,
+            400.,
+            "#bcb4ae",
+        )
+        .wrap(),
+    );
+    let mut footer = row()
+        .w_full()
+        .gap(7.)
+        .center_y()
+        .child(button(
+            "Add executable…",
+            "add",
+            editable,
+            false,
+            |s, _| s.editor_job(true),
+        ))
+        .child(el().grow(1.))
+        .child(button(
+            if s.active == Some(true) {
+                "Done"
+            } else {
+                "Cancel"
+            },
+            "cancel",
+            !s.busy,
+            false,
+            |s, tx| s.leave_editor(tx),
+        ));
+    let save = editable && editor.changed();
+    footer = footer.child(button("Save", "save", save, save, |s, _| {
+        s.editor_job(false)
+    }));
+    if let Some(note) =
+        s.error
+            .as_deref()
+            .or(editor.notice.as_deref())
+            .or(if s.active == Some(true) {
+                Some("Stop and seal the session to add or remove apps.")
+            } else {
+                None
+            })
+    {
+        list = col()
+            .grow(1.)
+            .min_h(0.)
+            .gap(4.)
+            .child(
+                label(note, 12., 400., "#f4ddc6")
+                    .wrap()
+                    .max_h(45.)
+                    .scroll(Default::default()),
+            )
+            .child(list);
+    }
+    content
+        .child(list)
+        .child(el().w_full().h(1.).fill(rgb("#41362d")))
+        .child(footer)
+}
+
+fn session_view(mut content: El, s: &Panel) -> El {
+    let editable = !s.busy && s.error.is_none() && s.active.is_some();
+    content = content
+        .child(
+            row()
+                .w_full()
+                .center_y()
+                .child(
+                    label(
+                        if s.error.is_some() {
+                            "Session needs attention"
+                        } else {
+                            "Personal Session"
+                        },
+                        23.,
+                        600.,
+                        "#f7f3ee",
+                    )
+                    .window_drag(),
+                )
+                .child(el().grow(1.).window_drag())
+                .child(button("Manage apps", "manage", editable, false, |s, tx| {
+                    s.edit(tx)
+                })),
         )
         .child(label(&s.detail, 13., 400., "#d2c7bd").wrap());
-    let mut list = col().grow(1.).min_h(0.).gap(3.);
+    let entries = apps::entries();
+    let mut list = col().grow(1.).min_h(0.).gap(3.).scroll(Default::default());
     if let Some(e) = &s.error {
+        list = list.child(label(e, 12., 400., "#f4ddc6").wrap());
+    } else if entries.is_empty() {
         list = list
-            .scroll(Default::default())
-            .child(label(e, 12., 400., "#f4ddc6").wrap())
+            .child(label("No session apps", 15., 600., "#f7f3ee"))
+            .child(
+                label(
+                    "Choose Manage apps to add your first app.",
+                    13.,
+                    400.,
+                    "#d2c7bd",
+                )
+                .wrap(),
+            );
     } else {
-        for (i, app) in APPS.iter().enumerate().filter(|(_, app)| app.enabled()) {
-            let (w, p) = s.counts[i];
-            let status = if s.active.is_none() {
-                "…".into()
-            } else {
-                match (w, p) {
-                    (0, 0) => "Closed".into(),
-                    (0, _) => "Background".into(),
-                    (1, _) => "1 window".into(),
-                    _ => format!("{w} windows"),
-                }
+        for (i, entry) in entries.iter().enumerate() {
+            let status = match (s.active, s.counts.get(i).copied()) {
+                (None, _) | (Some(true), None) => "…".into(),
+                (Some(false), _) | (_, Some((0, 0))) => "Closed".into(),
+                (_, Some((0, _))) => "Background".into(),
+                (_, Some((1, _))) => "1 window".into(),
+                (_, Some((w, _))) => format!("{w} windows"),
             };
             let mut icon = el().size(18., 18.);
-            if let Some(img) = &s.icons[i] {
+            if let Some(img) = APPS
+                .iter()
+                .position(|a| a.id == entry.key)
+                .and_then(|i| s.icons[i].as_ref())
+            {
                 icon = icon.pixels(img.pixels());
             } else {
                 icon = icon.center().radius(4.).fill(rgb("#51463c")).child(label(
-                    &app.name[..1],
+                    entry.name.chars().next().unwrap_or('?').to_string(),
                     12.,
                     600.,
                     "#f7f3ee",
@@ -278,8 +663,12 @@ fn view(s: &Panel, _: &mut Cx<Panel>) -> El {
                     .center_y()
                     .gap(8.)
                     .child(icon)
-                    .child(label(app.name, 13., 400., "#f7f3ee"))
-                    .child(el().grow(1.))
+                    .child(
+                        label(&entry.name, 13., 400., "#f7f3ee")
+                            .grow(1.)
+                            .min_w(0.)
+                            .truncate(),
+                    )
                     .child(label(status, 12., 400., "#bcb4ae")),
             );
         }
@@ -306,26 +695,19 @@ fn view(s: &Panel, _: &mut Cx<Panel>) -> El {
                 "Start session"
             },
             "start",
-            s.allowed(Action::Start),
-            s.allowed(Action::Start),
+            s.allowed(Action::Start) && !entries.is_empty(),
+            s.allowed(Action::Start) && !entries.is_empty(),
             |s, _| s.run(Action::Start),
         ));
-    content = content
+    content
         .child(list)
         .child(el().w_full().h(1.).fill(rgb("#41362d")))
-        .child(footer);
-    col()
-        .w_full()
-        .h_full()
-        .padding(16.)
-        .radial_gradient(
-            [0.34, 0.98],
-            160.,
-            [(0., rgb("#8a451a")), (1., rgb("#0e0d0d"))],
-        )
-        .child(content)
+        .child(footer)
 }
-pub fn run(args: Vec<String>) -> Result<()> {
+pub fn run(mut args: Vec<String>) -> Result<()> {
+    std::env::set_current_dir("/")?;
+    let manage = args.iter().any(|a| a == "--manage-apps");
+    args.retain(|a| a != "--manage-apps");
     let tooling = args.iter().any(|s| s == "--snap" || s == "--tree");
     let _guard = if tooling {
         None
@@ -352,12 +734,22 @@ pub fn run(args: Vec<String>) -> Result<()> {
     };
     rune::set_app_id("personal-session");
     let mut spec = AppSpec::new("Personal Session", (428., 290.), Panel::default, view);
+    if manage {
+        spec.init = || Panel {
+            open_editor_on_check: true,
+            ..Panel::default()
+        };
+    }
     spec.min_size = Some((428., 290.));
     spec.setup = Some(setup);
     spec.poll = Some(poll);
     spec.on_key = Some(|s, e, tx| {
         if !s.busy && matches!(e.key, Key::Escape | Key::Command('w')) {
-            tx.quit();
+            if s.editor.is_some() && matches!(e.key, Key::Escape) {
+                s.leave_editor(tx);
+            } else {
+                tx.quit();
+            }
             true
         } else {
             false
@@ -399,7 +791,7 @@ mod tests {
         assert!(!s.allowed(Action::Start));
         assert!(s.allowed(Action::Stop));
         s.error = Some("Volume error".into());
-        assert!(!s.allowed(Action::Stop));
+        assert!(s.allowed(Action::Stop));
         assert!(s.allowed(Action::Check));
     }
 }
