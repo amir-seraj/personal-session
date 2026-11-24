@@ -20,7 +20,7 @@ use std::{
 
 enum Message {
     Progress(String),
-    Done(Result<Option<Counts>>),
+    Done(Action, Result<Option<Counts>>),
     Picked(Result<Option<String>>),
     Saved(Result<()>),
 }
@@ -118,6 +118,7 @@ struct Panel {
     editor: Option<Editor>,
     open_editor_on_check: bool,
     counts: Counts,
+    retry_start: bool,
     busy: bool,
     error: Option<String>,
     detail: String,
@@ -136,6 +137,7 @@ impl Default for Panel {
             editor: None,
             open_editor_on_check: false,
             counts: Default::default(),
+            retry_start: false,
             busy: false,
             error: None,
             detail: "Checking personal apps…".into(),
@@ -153,7 +155,8 @@ impl Panel {
         !self.busy
             && (a == Action::Check
                 || (a == Action::Stop && self.active == Some(true))
-                || (a == Action::Start && self.active == Some(false) && self.error.is_none()))
+                || (a == Action::Start
+                    && (self.retry_start || (self.active == Some(false) && self.error.is_none()))))
     }
     fn edit(&mut self, tx: &mut Tx) {
         if !self.busy && self.active.is_some() && self.error.is_none() {
@@ -214,7 +217,7 @@ impl Panel {
         self.error = None;
         self.detail = match a {
             Action::Check => "Checking personal apps…",
-            Action::Start => "Unlock your personal volume in the terminal prompt.",
+            Action::Start => "Opening your personal session…",
             Action::Stop => "Closing personal apps…",
         }
         .into();
@@ -225,22 +228,10 @@ impl Panel {
                 match a {
                     Action::Check => (),
                     Action::Start => {
-                        // The CLI verifies the mount again under the operation lock.
-                        if !volume::mounted()? {
-                            ensure!(
-                                Command::new("/usr/bin/kitty")
-                                    .args(["--title", "Unlock Personal Session", "--"])
-                                    .arg(std::env::current_exe()?)
-                                    .args(["start", "--if-sealed"])
-                                    .status()?
-                                    .success(),
-                                "Unlock or startup was cancelled."
-                            );
-                            ensure!(
-                                session::status()?,
-                                "Personal session did not finish starting."
-                            );
-                        }
+                        ensure!(
+                            session::start(session::StartMode::Panel)? == 0,
+                            "Another session operation is in progress."
+                        );
                     }
                     Action::Stop => {
                         ensure!(
@@ -254,7 +245,7 @@ impl Panel {
                 }
                 session::check()
             };
-            let _ = tx.send(Message::Done(work()));
+            let _ = tx.send(Message::Done(a, work()));
             wake();
         });
     }
@@ -320,7 +311,7 @@ fn poll(s: &mut Panel, clock: f64, tx: &mut Tx) -> bool {
                     }
                 }
             }
-            Message::Done(result) => {
+            Message::Done(action, result) => {
                 s.busy = false;
                 if s.quit_when_done {
                     tx.quit();
@@ -328,8 +319,13 @@ fn poll(s: &mut Panel, clock: f64, tx: &mut Tx) -> bool {
                 match result {
                     Ok(state) => {
                         s.active = Some(state.is_some());
+                        s.retry_start = state
+                            .as_ref()
+                            .is_some_and(|counts| counts.iter().any(|(wins, _)| *wins == 0));
 
-                        s.detail = if state.is_some() {
+                        s.detail = if s.retry_start {
+                            "Volume unlocked. Retry start to open missing apps."
+                        } else if state.is_some() {
                             "Super+S opens the scratchpad. Stop and seal to change apps."
                         } else {
                             "Start your session to unlock the personal volume."
@@ -343,7 +339,13 @@ fn poll(s: &mut Panel, clock: f64, tx: &mut Tx) -> bool {
                     }
                     Err(e) => {
                         s.error = Some(format!("{e:#}"));
-                        s.detail = if s.active == Some(true) {
+                        s.retry_start = action == Action::Start;
+                        if s.retry_start {
+                            s.active = volume::mounted().ok();
+                        }
+                        s.detail = if s.retry_start {
+                            "Review the details, then retry start."
+                        } else if s.active == Some(true) {
                             "Review the details, then retry Stop & seal."
                         } else {
                             "Review the details, then refresh the session."
@@ -689,7 +691,9 @@ fn session_view(mut content: El, s: &Panel) -> El {
             |s, _| s.run(Action::Stop),
         ))
         .child(button(
-            if s.active == Some(true) {
+            if s.retry_start {
+                "Retry start"
+            } else if s.active == Some(true) {
                 "Session active"
             } else {
                 "Start session"
@@ -778,7 +782,7 @@ pub fn run(mut args: Vec<String>) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
-    fn start_is_only_available_when_sealed() {
+    fn start_and_retry_availability() {
         let mut s = Panel::default();
         assert!(!s.allowed(Action::Start));
         s.active = Some(false);
@@ -793,5 +797,9 @@ mod tests {
         s.error = Some("Volume error".into());
         assert!(s.allowed(Action::Stop));
         assert!(s.allowed(Action::Check));
+        s.retry_start = true;
+        assert!(s.allowed(Action::Start));
+        s.busy = true;
+        assert!(!s.allowed(Action::Start));
     }
 }

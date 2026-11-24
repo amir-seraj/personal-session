@@ -1,6 +1,6 @@
 use crate::apps::{self, Entry, Groups, WORKSPACE};
 use crate::volume;
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use serde_json::json;
 use std::{
     collections::HashMap,
@@ -9,7 +9,7 @@ use std::{
     io::Write,
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::PathBuf,
-    process::Command,
+    process::{Command, Stdio},
     thread,
     time::{Duration, Instant, SystemTime},
 };
@@ -102,13 +102,79 @@ pub fn status() -> Result<bool> {
         report(&entries, &apps::windows(&entries)?)
     }
 }
-pub fn start(only_sealed: bool) -> Result<i32> {
+#[derive(Clone, Copy, PartialEq)]
+pub enum StartMode {
+    Terminal,
+    IfSealed,
+    Panel,
+}
+
+fn unlock_with_dialog() -> Result<bool> {
+    let (program, args): (&str, &[&str]) = if std::path::Path::new("/usr/bin/zenity").is_file() {
+        (
+            "/usr/bin/zenity",
+            &["--password", "--title=Unlock personal volume"],
+        )
+    } else {
+        (
+            "/usr/bin/kdialog",
+            &[
+                "--title",
+                "Personal Session",
+                "--password",
+                "VeraCrypt volume password",
+            ],
+        )
+    };
+    let dialog = Command::new(program)
+        .args(args)
+        .output()
+        .context("Could not open the volume password dialog. Install Zenity or KDialog.")?;
+    let password = zeroize::Zeroizing::new(dialog.stdout);
+    if dialog.status.code() == Some(1) && password.is_empty() && dialog.stderr.is_empty() {
+        return Ok(false);
+    }
+    ensure!(
+        dialog.status.success(),
+        "Could not open the volume password dialog: {}",
+        String::from_utf8_lossy(&dialog.stderr).trim()
+    );
+    ensure!(
+        password
+            .strip_suffix(b"\n")
+            .is_some_and(|line| !line.is_empty() && !line.contains(&b'\n')),
+        "Enter the volume password."
+    );
+    let mut helper = Command::new("/usr/bin/sudo")
+        .args(["-n", "/usr/local/bin/personal-mount"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("Starting the volume helper")?;
+    let written = helper
+        .stdin
+        .take()
+        .context("Missing password pipe")?
+        .write_all(&password);
+    drop(password);
+    let result = helper.wait_with_output()?;
+    ensure!(
+        result.status.success(),
+        "Could not unlock the volume. {}",
+        String::from_utf8_lossy(&result.stderr).trim()
+    );
+    written.context("Sending the volume password")?;
+    Ok(true)
+}
+
+pub fn start(mode: StartMode) -> Result<i32> {
     let Some(_guard) = lock("start.lock")? else {
         eprintln!("Another personal session command is in progress.");
         return Ok(2);
     };
     personal_session::config::get().refresh_selection()?;
-    if only_sealed && volume::mounted()? {
+    if mode == StartMode::IfSealed && volume::mounted()? {
         volume::verify()?;
         println!("Personal session is already active.");
         return Ok(0);
@@ -119,13 +185,13 @@ pub fn start(only_sealed: bool) -> Result<i32> {
         .mode(0o600)
         .open(state_dir()?.join("start.log"))?;
     writeln!(log, "{:?} start", SystemTime::now())?;
-    let result = start_locked(&mut log);
+    let result = start_locked(&mut log, mode);
     if let Err(e) = &result {
         writeln!(log, "{e:#}")?;
     }
     result
 }
-fn start_locked(log: &mut File) -> Result<i32> {
+fn start_locked(log: &mut File, mode: StartMode) -> Result<i32> {
     let entries = apps::entries();
     ensure!(
         !entries.is_empty(),
@@ -133,13 +199,19 @@ fn start_locked(log: &mut File) -> Result<i32> {
     );
     apps::clients()?;
     if !volume::mounted()? {
-        ensure!(
-            Command::new("/usr/bin/sudo")
-                .arg("/usr/local/bin/personal-mount")
-                .status()?
-                .success(),
-            "Unlock failed."
-        )
+        if mode == StartMode::Panel {
+            if !unlock_with_dialog()? {
+                return Ok(0);
+            }
+        } else {
+            ensure!(
+                Command::new("/usr/bin/sudo")
+                    .arg("/usr/local/bin/personal-mount")
+                    .status()?
+                    .success(),
+                "Unlock failed."
+            );
+        }
     }
     volume::verify()?;
     let g = apps::windows(&entries)?;
@@ -218,7 +290,23 @@ fn start_locked(log: &mut File) -> Result<i32> {
             ready(w)
         )?
     }
-    Ok(if report(&entries, &g)? { 0 } else { 1 })
+    if !report(&entries, &g)? {
+        let pending = entries
+            .iter()
+            .zip(&g)
+            .filter(|(_, wins)| !ready(wins))
+            .map(|(entry, wins)| {
+                if wins.is_empty() {
+                    format!("{} did not open a window", entry.name)
+                } else {
+                    format!("{} is outside the session workspace", entry.name)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(". ");
+        anyhow::bail!("Volume unlocked. {pending}.");
+    }
+    Ok(0)
 }
 pub fn stop(progress: &dyn Fn(&str)) -> Result<i32> {
     let Some(_guard) = lock("start.lock")? else {

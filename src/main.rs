@@ -49,8 +49,8 @@ fn command(cmd: &str, args: &[String]) -> Result<i32> {
     }
     match cmd {
         "start" => match args {
-            [] => session::start(false),
-            [v] if v == "--if-sealed" => session::start(true),
+            [] => session::start(session::StartMode::Terminal),
+            [v] if v == "--if-sealed" => session::start(session::StartMode::IfSealed),
             [v] if v == "--status" => Ok(if session::status()? { 0 } else { 1 }),
             [v] if v == "--gui" => {
                 ui::run(vec![])?;
