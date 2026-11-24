@@ -237,12 +237,7 @@ pub fn stop(progress: &dyn Fn(&str)) -> Result<i32> {
             progress(&format!("Closing {} ({})", entries[i].name, wins.len()));
         }
         for w in wins {
-            let selector = json!(format!("address:{}", w.address));
-            if let Err(e) = apps::dispatch(&format!("hl.dsp.window.close({{window={selector}}})"))
-                && apps::clients()?.iter().any(|c| c.address == w.address)
-            {
-                return Err(e);
-            }
+            apps::close_window(&w.address)?;
         }
     }
     let deadline = Instant::now() + Duration::from_secs(8);
@@ -279,6 +274,7 @@ pub fn stop(progress: &dyn Fn(&str)) -> Result<i32> {
         );
         thread::sleep(Duration::from_millis(250));
     }
+    crate::holders::release(&personal_session::config::get().mount, progress)?;
     progress("Checking holders and sealing the volume…");
     let out = Command::new("/usr/bin/sudo")
         .args(["-n", "/usr/local/bin/personal-umount"])

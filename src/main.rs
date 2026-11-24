@@ -1,5 +1,6 @@
 mod apps;
 mod custom;
+mod holders;
 mod session;
 mod ui;
 use anyhow::{Result, bail, ensure};

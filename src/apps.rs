@@ -73,7 +73,7 @@ pub struct Window {
     #[serde(rename = "initialClass", default)]
     initial_class: String,
     pub mapped: bool,
-    pid: i32,
+    pub pid: i32,
 }
 pub fn clients() -> Result<Vec<Window>> {
     Ok(serde_json::from_str(&volume::output(
@@ -261,35 +261,53 @@ pub fn roots(entries: &[Entry]) -> Result<Vec<(i32, usize)>> {
     }
     Ok(out)
 }
-pub fn terminate(pid: i32, entry: &Entry) -> Result<()> {
-    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+pub fn pin(pid: i32) -> Result<Option<std::os::fd::OwnedFd>> {
+    use std::os::fd::{FromRawFd, OwnedFd};
     let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
     if fd < 0 {
         let e = std::io::Error::last_os_error();
         if e.raw_os_error() == Some(libc::ESRCH) {
-            return Ok(());
+            return Ok(None);
         }
         return Err(e.into());
     }
     let fd = unsafe { OwnedFd::from_raw_fd(fd as i32) };
+    Ok(Some(fd))
+}
+pub fn terminate_pinned(fd: &std::os::fd::OwnedFd) -> Result<()> {
+    use std::os::fd::AsRawFd;
+    let r = unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            fd.as_raw_fd(),
+            libc::SIGTERM,
+            std::ptr::null::<libc::siginfo_t>(),
+            0,
+        )
+    };
+    if r < 0 {
+        let e = std::io::Error::last_os_error();
+        if e.raw_os_error() != Some(libc::ESRCH) {
+            return Err(e.into());
+        }
+    }
+    Ok(())
+}
+pub fn terminate(pid: i32, entry: &Entry) -> Result<()> {
+    let Some(fd) = pin(pid)? else { return Ok(()) };
     if let Some(p) = proc_info(pid)
         && entry.owns(&p, crate::custom::owner_key(pid, &get().mount).as_deref())
     {
-        let r = unsafe {
-            libc::syscall(
-                libc::SYS_pidfd_send_signal,
-                fd.as_raw_fd(),
-                libc::SIGTERM,
-                std::ptr::null::<libc::siginfo_t>(),
-                0,
-            )
-        };
-        if r < 0 {
-            let e = std::io::Error::last_os_error();
-            if e.raw_os_error() != Some(libc::ESRCH) {
-                return Err(e.into());
-            }
-        }
+        terminate_pinned(&fd)?;
+    }
+    Ok(())
+}
+pub fn close_window(address: &str) -> Result<()> {
+    let selector = serde_json::json!(format!("address:{address}"));
+    if let Err(e) = dispatch(&format!("hl.dsp.window.close({{window={selector}}})"))
+        && clients()?.iter().any(|w| w.address == address)
+    {
+        return Err(e);
     }
     Ok(())
 }

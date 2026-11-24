@@ -152,11 +152,8 @@ impl Panel {
     fn allowed(&self, a: Action) -> bool {
         !self.busy
             && (a == Action::Check
-                || self.error.is_none()
-                    && matches!(
-                        (a, self.active),
-                        (Action::Stop, Some(true)) | (Action::Start, Some(false))
-                    ))
+                || (a == Action::Stop && self.active == Some(true))
+                || (a == Action::Start && self.active == Some(false) && self.error.is_none()))
     }
     fn edit(&mut self, tx: &mut Tx) {
         if !self.busy && self.active.is_some() && self.error.is_none() {
@@ -346,7 +343,12 @@ fn poll(s: &mut Panel, clock: f64, tx: &mut Tx) -> bool {
                     }
                     Err(e) => {
                         s.error = Some(format!("{e:#}"));
-                        s.detail = "Review the details, then refresh the session.".into();
+                        s.detail = if s.active == Some(true) {
+                            "Review the details, then retry Stop & seal."
+                        } else {
+                            "Review the details, then refresh the session."
+                        }
+                        .into();
                     }
                 }
             }
@@ -703,6 +705,7 @@ fn session_view(mut content: El, s: &Panel) -> El {
         .child(footer)
 }
 pub fn run(mut args: Vec<String>) -> Result<()> {
+    std::env::set_current_dir("/")?;
     let manage = args.iter().any(|a| a == "--manage-apps");
     args.retain(|a| a != "--manage-apps");
     let tooling = args.iter().any(|s| s == "--snap" || s == "--tree");
@@ -788,7 +791,7 @@ mod tests {
         assert!(!s.allowed(Action::Start));
         assert!(s.allowed(Action::Stop));
         s.error = Some("Volume error".into());
-        assert!(!s.allowed(Action::Stop));
+        assert!(s.allowed(Action::Stop));
         assert!(s.allowed(Action::Check));
     }
 }

@@ -6,7 +6,7 @@ Open a VeraCrypt volume and launch dedicated app profiles on Hyprland’s `speci
 
 ## Requirements
 
-The downloadable x86_64 Linux build targets glibc 2.44 or newer. It was built on Manjaro. Other GNU/Linux systems can build from source. The panel uses Rune and Vulkan. Session control requires a running Hyprland session with Lua dispatch support, Kitty, VeraCrypt, sudo, getent, GNU coreutils, findmnt and fuser. Install the apps you enable. The supported launchers include `/usr/bin/code`, `/usr/bin/google-chrome-stable`, `/usr/bin/obsidian` and Telegram Desktop.
+The downloadable x86_64 Linux build targets glibc 2.44 or newer. It was built on Manjaro. Other GNU/Linux systems can build from source. The panel uses Rune and Vulkan. Session control requires a running Hyprland session with Lua dispatch support, Kitty, VeraCrypt, sudo, getent, GNU coreutils, findmnt, fuser and systemd user services. Install the apps you enable. The supported launchers include `/usr/bin/code`, `/usr/bin/google-chrome-stable`, `/usr/bin/obsidian` and Telegram Desktop.
 
 ## Install
 
@@ -58,7 +58,7 @@ You can also edit `~/.config/personal-session/config.json` while the session is 
 
 ## Use
 
-Open **Personal Session** in the application menu. **Start** opens the password prompt in Kitty. The configured profiles launch on the scratchpad. Use your Hyprland shortcut for that workspace. To close, save your work and use the panel’s stop action. If an app needs confirmation or another process holds the volume, resolve the prompt or release the file and retry.
+Open **Personal Session** in the application menu. **Start** opens the password prompt in Kitty. The configured profiles launch on the scratchpad. Use your Hyprland shortcut for that workspace. To close, save your work and use the panel’s stop action. Stop & seal also closes windows using the volume, stops user services that hold files open and asks remaining user processes to exit. If an app asks to save, answer its prompt and retry Stop & seal. The volume helper checks for remaining holders before dismounting.
 
 | Command | Action |
 | --- | --- |
