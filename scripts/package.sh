@@ -7,7 +7,7 @@ export RUSTFLAGS="--remap-path-prefix=$HOME=/build"
 export CFLAGS="-ffile-prefix-map=$HOME=/build" CXXFLAGS="-ffile-prefix-map=$HOME=/build"
 cargo test --release --locked -j2
 cargo build --release --locked -j2
-name=personal-session-1.1.1-x86_64-linux-gnu
+name=personal-session-1.1.2-x86_64-linux-gnu
 mkdir -p dist
 stage=$(mktemp -d)
 trap 'rm -rf -- "$stage"' EXIT
