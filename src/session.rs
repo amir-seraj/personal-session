@@ -50,7 +50,13 @@ pub fn save_selection(expected: &[String], next: &[String]) -> Result<()> {
     );
     personal_session::config::get().save_selection(expected, next)
 }
-pub type Counts = Vec<(usize, usize)>;
+#[derive(Clone, Copy)]
+pub struct AppState {
+    pub windows: usize,
+    pub processes: usize,
+    pub ready: bool,
+}
+pub type Counts = Vec<AppState>;
 pub fn check() -> Result<Option<Counts>> {
     personal_session::config::get().refresh_selection()?;
     if !volume::mounted()? {
@@ -59,14 +65,21 @@ pub fn check() -> Result<Option<Counts>> {
     volume::verify()?;
     let entries = apps::entries();
     let groups = apps::windows(&entries)?;
-    let mut counts: Counts = groups.iter().map(|w| (w.len(), 0)).collect();
+    let mut counts: Counts = groups
+        .iter()
+        .map(|w| AppState {
+            windows: w.len(),
+            processes: 0,
+            ready: ready(w),
+        })
+        .collect();
     for (_, i) in apps::roots(&entries)? {
-        counts[i].1 += 1
+        counts[i].processes += 1
     }
     Ok(Some(counts))
 }
 fn ready(wins: &[apps::Window]) -> bool {
-    !wins.is_empty() && wins.iter().all(|w| w.workspace.name == WORKSPACE)
+    !wins.is_empty() && wins.iter().all(|w| w.workspace.is_scratchpad())
 }
 fn report(entries: &[Entry], g: &Groups) -> Result<bool> {
     let roots = apps::roots(entries)?;
@@ -250,7 +263,7 @@ fn start_locked(log: &mut File, mode: StartMode) -> Result<i32> {
             if wins.is_empty() && !failed[i] {
                 settled = false
             }
-            for w in wins.iter().filter(|w| w.workspace.name != WORKSPACE) {
+            for w in wins.iter().filter(|w| !w.workspace.is_scratchpad()) {
                 settled = false;
                 if moved
                     .get(&w.address)
@@ -380,11 +393,15 @@ mod tests {
     use super::*;
     #[test]
     fn all_windows_must_be_on_target() {
-        let make = |name: &str| {
-            serde_json::from_value(json!({"address":"0x1","mapped":true,"pid":1,"workspace":{"name":name},"class":"chrome"})).unwrap()
+        let make = |id, name: &str| {
+            serde_json::from_value(json!({"address":"0x1","mapped":true,"pid":1,"workspace":{"id":id,"name":name},"class":"chrome"})).unwrap()
         };
         assert!(!ready(&[]));
-        assert!(ready(&[make(WORKSPACE)]));
-        assert!(!ready(&[make(WORKSPACE), make("9")]));
+        assert!(ready(&[make(-99, "special:special")]));
+        assert!(!ready(&[
+            make(-99, "special:special"),
+            make(-98, "special:special")
+        ]));
+        assert!(!ready(&[make(9, "9")]));
     }
 }

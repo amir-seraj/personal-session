@@ -1,6 +1,6 @@
 # Personal Session
 
-Open a VeraCrypt volume and launch dedicated app profiles on Hyprland’s `special:special` workspace. The same panel closes their windows, checks for processes holding the volume open, and reports whether VeraCrypt dismounted it.
+Open a VeraCrypt volume and launch dedicated app profiles on Hyprland’s default scratchpad. The same panel closes their windows, checks for processes holding the volume open, and reports whether VeraCrypt dismounted it.
 
 ![Personal Session showing a closed volume in a fresh profile](assets/preview.png)
 
@@ -10,12 +10,12 @@ The downloadable x86_64 Linux build targets glibc 2.44 or newer. It was built on
 
 ## Install
 
-Download the tarball and SHA256SUMS from the [release page](https://github.com/amir-seraj/personal-session/releases/tag/v1.1.1). Run these commands in the download directory.
+Download the tarball and SHA256SUMS from the [release page](https://github.com/amir-seraj/personal-session/releases/tag/v1.1.2). Run these commands in the download directory.
 
 ```sh
 sha256sum -c SHA256SUMS
-tar -xzf personal-session-1.1.1-x86_64-linux-gnu.tar.gz
-cd personal-session-1.1.1-x86_64-linux-gnu
+tar -xzf personal-session-1.1.2-x86_64-linux-gnu.tar.gz
+cd personal-session-1.1.2-x86_64-linux-gnu
 sudo ./install.sh
 ```
 
@@ -70,6 +70,6 @@ Open **Personal Session** in the application menu. **Start** opens a graphical p
 
 From the checkout, run `bash scripts/package.sh` with a recent stable Rust toolchain, Git, Python 3, GNU tar, Bash and a C/C++ build toolchain installed. It runs the release tests and writes the archive and checksum under `dist/`. Dependencies are pinned in Cargo.lock. The released binaries include Rune’s default fonts. WhiteSur icons are optional and loaded from an existing local installation.
 
-Run `sudo /usr/local/lib/personal-session/v1.1.1/uninstall.sh` to remove the program and menu entry. Then remove its two sudoers grants with visudo. The volume and user configuration stay on disk.
+Run `sudo /usr/local/lib/personal-session/v1.1.2/uninstall.sh` to remove the program and menu entry. Then remove its two sudoers grants with visudo. The volume and user configuration stay on disk.
 
 Personal Session is distributed under the [MIT license](LICENSE). The binary archive includes third-party license notices. See [Rune](https://github.com/anomalyco/rune) for the renderer and [WhiteSur](https://github.com/vinceliuice/WhiteSur-icon-theme) for optional icons.

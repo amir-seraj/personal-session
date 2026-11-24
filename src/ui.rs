@@ -321,10 +321,10 @@ fn poll(s: &mut Panel, clock: f64, tx: &mut Tx) -> bool {
                         s.active = Some(state.is_some());
                         s.retry_start = state
                             .as_ref()
-                            .is_some_and(|counts| counts.iter().any(|(wins, _)| *wins == 0));
+                            .is_some_and(|counts| counts.iter().any(|s| !s.ready));
 
                         s.detail = if s.retry_start {
-                            "Volume unlocked. Retry start to open missing apps."
+                            "Volume unlocked. Retry start to bring your apps to the scratchpad."
                         } else if state.is_some() {
                             "Super+S opens the scratchpad. Stop and seal to change apps."
                         } else {
@@ -639,10 +639,12 @@ fn session_view(mut content: El, s: &Panel) -> El {
         for (i, entry) in entries.iter().enumerate() {
             let status = match (s.active, s.counts.get(i).copied()) {
                 (None, _) | (Some(true), None) => "…".into(),
-                (Some(false), _) | (_, Some((0, 0))) => "Closed".into(),
-                (_, Some((0, _))) => "Background".into(),
-                (_, Some((1, _))) => "1 window".into(),
-                (_, Some((w, _))) => format!("{w} windows"),
+                (Some(false), _) => "Closed".into(),
+                (_, Some(s)) if s.windows == 0 && s.processes == 0 => "Closed".into(),
+                (_, Some(s)) if s.windows == 0 => "Background".into(),
+                (_, Some(s)) if !s.ready => "Outside scratchpad".into(),
+                (_, Some(s)) if s.windows == 1 => "1 window".into(),
+                (_, Some(s)) => format!("{} windows", s.windows),
             };
             let mut icon = el().size(18., 18.);
             if let Some(img) = APPS
